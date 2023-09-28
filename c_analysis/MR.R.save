@@ -1,0 +1,109 @@
+#Import HOME variable from Bash
+HOME=Sys.getenv("HOME")
+LIB=Sys.getenv("LIB")
+
+#Put path in variable
+DATA=paste(HOME, "/scratch/EVCOP/data/", sep="")
+
+#Load data.table package
+library(data.table)
+library(DescTools, lib=LIB)
+library(ivreg, lib=LIB)
+
+#############
+# READ DATA #
+#############
+
+setwd(DATA)
+data<-fread("data-mr.txt", header=TRUE, data.table=F)
+PC<-fread("PC.txt", header=TRUE, data.table=F)
+chip<-fread("chip.txt", header=TRUE, select=c(1,3), data.table=F)
+smoke_scores <- fread("smoke_scores.txt", header=TRUE, data.table=F)
+risk_scores <- fread("smoke_scores.txt", header=TRUE, data.table=F)
+
+#Name
+names(PC)[1]<-"IID"
+for (i in 1:10){
+	names(PC)[i+1]<-paste("PC", i, sep="")
+}
+names(chip)<-c("IID", "Chip")
+
+#Merge
+cov<-merge(PC, chip)
+names(cov)[1]<-"app"
+data<-merge(data, cov)
+data<-merge(data, smoke_scores)
+data<-merge(data, risk_scores)
+print(nrow(data))
+
+###################
+# GRS-CONFOUNDERS #
+###################
+
+GRSOutcome <- function(con){
+	fit <- glm(con~scores + Age + Sex + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8 + PC9 + PC10, data=data, family="binomial")
+	print(exp(coef(fit)["scores"]))
+	print(exp(confint(fit, "scores", level=0.95)))
+	print(PseudoR2(fit, which = "McFadden"))
+}
+
+GRSOutcome(data$RiskTaking)
+GRSOutcome(data$Ever_Never)
+
+#################
+# CONFOUNDER MR #
+#################
+
+MR <- function(outcome){
+	iv.con<-data$scores[data$SCHZ==0]
+	x.con<-data$Ever_Never[data$SCHZ==0]
+	data.con<-data[data$SCHZ==0,]
+
+	m_iv <- glm(outcome~predict(glm(x.con~iv.con + Age + Sex + Chip + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8 + PC9 + PC10, data=data.con, family="binomial"), newdata=list(iv.con=data$scores)) + Age + Sex + Chip + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8 + PC9 + PC10, data=data, family="binomial")
+	B <- coef(summary(m_iv))[2 ,"Estimate"]
+	SE <- coef(summary(m_iv))[2 ,"Std. Error"]
+	print(exp(B))
+	print(exp(B-(1.96*SE)))
+	print(exp(B+(1.96*SE)))
+}
+
+######
+# MR #
+######
+
+#Get controls
+iv.con<-data$scores[data$SCHZ==0]
+x.con<-data$Ever_Never[data$SCHZ==0]
+data.con<-data[data$SCHZ==0,]
+
+#Get strength
+fit <- glm(x.con~iv.con + Age + Sex + Chip + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8 + PC9 + PC10, data=data.con, family="binomial")
+print(PseudoR2(fit, which = "McFadden"))
+
+#SD
+print(sd(data$Ever_Never))
+
+#Prevelance
+print(nrow(data[data$SCHZ==1,])/nrow(data))
+print(nrow(data[data$Ever_Never==1,])/nrow(data))
+
+#Standard MR
+m_iv <- glm(SCHZ~predict(glm(x.con~iv.con + Age + Sex + Chip + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8 + PC9 + PC10, data=data.con, family="binomial"), newdata=list(iv.con=data$scores)) + Age + Sex + Chip + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8 + PC9 + PC10, data=data, family="binomial")
+B <- coef(summary(m_iv))[2 ,"Estimate"]
+SE <- coef(summary(m_iv))[2 ,"Std. Error"]
+print(exp(B))
+print(exp(B-(1.96*SE)))
+print(exp(B+(1.96*SE)))
+
+
+#EVCOP Input
+m_iv<-ivreg(SCHZ ~ scale(Ever_Never) + Age + Sex + Chip + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8 + PC9 + PC10 | scores + Age + Sex + Chip + PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8 + PC9 + PC10, data = data)
+print(summary(m_iv)$diagnostics["Weak instruments","statistic"])
+print(R2<-summary(m_iv)$adj.r.squared)
+B <- coef(summary(m_iv))[2 ,"Estimate"]
+SE <- coef(summary(m_iv))[2 ,"Std. Error"]
+print(B)
+print(B-(1.96*SE))
+print(B+(1.96*SE))
+
+
